@@ -244,7 +244,7 @@ riak_pipe_vnode.erl
 
 ``riak_pipe:queue_work/4``::
 
-    queue_work(#fitting{chashfun=follow}=Fitting,
+    queue_work(#fitting{chashfun=follow}=Fitting,                              % Options を設定していない場合はこれが呼ばれる
                Input, Timeout, UsedPreflist) ->
         queue_work(Fitting, Input, Timeout, UsedPreflist, any_local_vnode());
     queue_work(#fitting{chashfun={Module, Function}}=Fitting,
