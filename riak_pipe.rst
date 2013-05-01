@@ -85,13 +85,11 @@ pipeline の構築
 riak_pipe.erl
 
 - riak_pipe_builder を使って pipeline を構築する。
-
     - riak_pipe_builder を開始
     - riak_pipe_fitting を開始
     - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
         - supervisor が落ちて再開されても子プロセスは自動的に再開されない
         - riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
-    
 - #pipe{} を返す
 
 
