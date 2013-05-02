@@ -222,7 +222,8 @@ riak_pipe_builder:init/1
         Ref = erlang:monitor(process, Pid),                                % riak_pipe_fitting を監視
         
         {Fitting, Ref}.                                                    % {#fitting{pid, ref, chashfun, nval}, Ref}
-                                                                           % pid は fitting の pid, ref は Sink の ref
+                                                                           % pid は fitting の pid
+                                                                           % ref は自分の次の fitting の ref
         
 riak_pipe_fitting_sup:add_fitting/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -287,8 +288,8 @@ riak_pipe_fitting:init/1
     riak_pipe:eoi(Pipe).                                             % 入力の終了を fitting へ送信
 
     
-riak_pipe:queue_work/3::
-~~~~~~~~~~~~~~~~~~~~~~~~
+riak_pipe:queue_work/3
+~~~~~~~~~~~~~~~~~~~~~~
 ``riak_pipe:queue_work/3``::
 
     queue_work(#pipe{fittings=[{_,Head}|_]}, Input, Timeout)
@@ -296,24 +297,24 @@ riak_pipe:queue_work/3::
         riak_pipe_vnode:queue_work(Head, Input, Timeout).            % 先頭の fitting (#fitting{}) を渡して
                                                                      % riak_pipe_vnode:queue_work/3 を呼ぶ
         
-riak_pipe:queue_work/4::
-~~~~~~~~~~~~~~~~~~~~~~
+riak_pipe_vnode:queue_work/4
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``riak_pipe_vnode:queue_work/4``::
 
-    queue_work(#fitting{chashfun=follow}=Fitting,                    % Options を設定していない場合はこれが呼ばれる
+    queue_work(#fitting{chashfun=follow}=Fitting,                    % Options を設定していない場合
                Input, Timeout, UsedPreflist) ->
         queue_work(Fitting, Input, Timeout, UsedPreflist, any_local_vnode());
         
-    queue_work(#fitting{chashfun={Module, Function}}=Fitting,
+    queue_work(#fitting{chashfun={Module, Function}}=Fitting,        % hash 関数が設定されていた場合
            Input, Timeout, UsedPreflist) ->
         queue_work(Fitting, Input, Timeout, UsedPreflist,
                    Module:Function(Input));
                
-    queue_work(#fitting{chashfun=Hash}=Fitting,
+    queue_work(#fitting{chashfun=Hash}=Fitting,                      % hash 関数に固定値が設定されていた場合
            Input, Timeout, UsedPreflist) when not is_function(Hash) ->
             queue_work(Fitting, Input, Timeout, UsedPreflist, Hash);
             
-    queue_work(#fitting{chashfun=HashFun}=Fitting,
+    queue_work(#fitting{chashfun=HashFun}=Fitting,                   % 1.0.x との互換性のため
            Input, Timeout, UsedPreflist) ->
         %% 1.0.x compatibility
         Hash = riak_pipe_fun:compat_apply(HashFun, [Input]),
