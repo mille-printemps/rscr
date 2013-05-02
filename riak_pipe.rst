@@ -19,7 +19,7 @@ Riak Source Code Reading @Tokyo #11
 riak_pipe_app.erl
 -----------------
 
-- application
+* application として実装
 
 ``riak_pipe_app:start/2``::
 
@@ -42,7 +42,7 @@ riak_pipe_app.erl
 riak_pipe_sup.erl
 -----------------
 
-- supervisor
+* supervisor として実装
 
 ``riak_pipe_sup:init/1``::
 
@@ -52,45 +52,45 @@ riak_pipe_sup.erl
         riak_core_capability:register(
           {riak_pipe, trace_format}, [ordsets, sets], sets),
 
-        VMaster = {riak_pipe_vnode_master,                                   % riak_core_vnode_master を開始
+        VMaster = {riak_pipe_vnode_master,                                 % riak_core_vnode_master を開始
                    {riak_core_vnode_master, start_link, [riak_pipe_vnode]},
                    permanent, 5000, worker, [riak_core_vnode_master]},
                    
-        BSup = {riak_pipe_builder_sup,                                       % riak_pipe_builder の supervisor を開始
-                {riak_pipe_builder_sup, start_link, []},                     % restart strategy が simple_one_for_one
-                   permanent, 5000, supervisor, [riak_pipe_builder_sup]},    % この時点では riak_pipe_builder は開始されない
+        BSup = {riak_pipe_builder_sup,                                     % riak_pipe_builder の supervisor を開始
+                {riak_pipe_builder_sup, start_link, []},                   % restart strategy が simple_one_for_one
+                   permanent, 5000, supervisor, [riak_pipe_builder_sup]},  % riak_pipe_builder は start_child/2 で開始
                    
-        FSup = {riak_pipe_fitting_sup,                                       % riak_pipe_fitting の supervisor を開始
-                {riak_pipe_fitting_sup, start_link, []},                     % restart strategy が simple_one_for_one
-                permanent, 5000, supervisor, [riak_pipe_fitting_sup]},       % この時点では riak_pipe_fitting は開始されない
+        FSup = {riak_pipe_fitting_sup,                                     % riak_pipe_fitting の supervisor を開始
+                {riak_pipe_fitting_sup, start_link, []},                     
+                permanent, 5000, supervisor, [riak_pipe_fitting_sup]},       
                 
-        CSup = {riak_pipe_qcover_sup,                                        % riak_qcover の supervisor を開始
-                {riak_pipe_qcover_sup, start_link, []},                      % restart strategy が simple_one_for_one
-                permanent, 5000, supervisor, [riak_pipe_qcover_sup]},        % この時点では riak_pipe_qcover は開始されない
+        CSup = {riak_pipe_qcover_sup,                                      % riak_qcover の supervisor を開始
+                {riak_pipe_qcover_sup, start_link, []},                      
+                permanent, 5000, supervisor, [riak_pipe_qcover_sup]},        
                 
-        {ok, { {one_for_one, 5, 10}, [VMaster, BSup, FSup, CSup]} }.         % one_for_one, 仮に子プロセスが落ちるとそのプロセスのみ再び開始される
+        {ok, { {one_for_one, 5, 10}, [VMaster, BSup, FSup, CSup]} }.       % one_for_one
+                                                                           % 子プロセスが落ちた場合そのプロセスのみ再開
 
         
 クライアント
 ==========
-
-- riak_pipe.erl にクライアントの API が定義されている。
+* riak_pipe.erlにクライアントの API が定義されている。
     - pipeline の構築
     - 入力の送信
 
 
 pipeline の構築
---------------
+---------------
 
 riak_pipe.erl
-
-- riak_pipe_builder を使って pipeline を構築する。
+~~~~~~~~~~~~~
+* riak_pipe_builder を使って pipeline を構築する。
     - riak_pipe_builder を開始
     - riak_pipe_fitting を開始
     - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
-        - supervisor が落ちて再開されても子プロセスは自動的に再開されない
-        - riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
-- #pipe{} を返す
+        + supervisor が落ちて再開されても子プロセスは自動的に再開されない
+        + riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
+* #pipe{} を返す
 
 
 ``riak_pipe:exec/2``::
@@ -99,25 +99,28 @@ riak_pipe.erl
         [ riak_pipe_fitting:validate_fitting(F) || F <- Spec ],
         CorrectOptions = correct_trace(
                            validate_sink_type(
-                             ensure_sink(Options))),               % Options が [] であった場合は生成される
-                                                                   % その場合 [{sink, #fitting{pid=self(), ref=make_ref(), chashfun=sink}}]
-                                                                   % となるので、Sink はクライアントプロセスになる?
-    riak_pipe_builder_sup:new_pipeline(Spec, CorrectOptions).      % pipeline を構築
+                             ensure_sink(Options))),          % Options が [] であった場合は生成される
+                                                              % [{sink, #fitting{pid=self(), ref=make_ref(), chashfun=sink}}]
+                                                              % となるので、Sink はクライアントプロセスになる?
+                                                              
+    riak_pipe_builder_sup:new_pipeline(Spec, CorrectOptions). % pipeline を構築
 
     
 riak_pipe_builder_sup.erl
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- riak_pipe_builder の supervisor
+* riak_pipe_builder の supervisor
 
 ``riak_pipe_builder_sup:new_pipeline/2``::
 
     new_pipeline(Spec, Options) ->
-        case supervisor:start_child(?MODULE, [Spec, Options]) of    % riak_pipe_builder を開始 -> supervisor の子プロセスとして追加
+        case supervisor:start_child(?MODULE, [Spec, Options]) of % riak_pipe_builder を開始して
+                                                                 % supervisor の子プロセスとして追加
             {ok, Pid, Ref} ->
-                case riak_pipe_builder:pipeline(Pid) of             % ``pipeline`` イベントを送信       
+                case riak_pipe_builder:pipeline(Pid) of          % ``pipeline`` イベントを送信       
                     {ok, #pipe{sink=#fitting{ref=Ref}}=Pipe} ->
-                        riak_pipe_stat:update({create, Pid}),       % 統計情報を収集
-                        {ok, Pipe};                                 % #pipe{} を返す -> exec の返り値
+                        riak_pipe_stat:update({create, Pid}),    % 統計情報を収集
+                        {ok, Pipe};                              % #pipe{} を返す -> exec の返り値
                     _ ->
                         riak_pipe_stat:update(create_error),
                         {error, startup_failure}
@@ -129,8 +132,8 @@ riak_pipe_builder_sup.erl
 
         
 riak_pipe_builder.erl
-
-- gen_fsm
+~~~~~~~~~~~~~~~~~~~~~
+* gen_fsm として実装
 
 ``riak_pipe_builder:init/1``::
 
@@ -148,7 +151,8 @@ riak_pipe_builder.erl
                     {ref, Ref},
                     {spec, Spec},
                     {options, Options},
-                    {fittings, Fittings}]),                                % pipe の情報を process dictionary へ格納 -> unit test に使う?
+                    {fittings, Fittings}]),                                % pipe の情報を process dictionary へ格納
+                                                                           % unit test に使う?
         {ok, wait_pipeline_shutdown,
         #state{options=Options,
                 pipe=Pipe,
@@ -165,8 +169,8 @@ riak_pipe_builder.erl
                             [start_fitting(FitSpec, Output, Options)|Acc]
                     end,
                     [start_fitting(Tail, ClientOutput, Options)],
-                    Rest).                                                 % 反転した Spec のリストに順に start_fitting/3 を適用
-                                                                           % [#fitting{pid, ref, chashfun, nval}, Ref}, ...] を返す
+                    Rest).                                                 % 反転した Spec に順に start_fitting/3 を適用
+                                                                           % [#fitting{pid, ref, chashfun, nval}, Ref}, ...] 
 
 ``riak_pipe_builder:start_fitting/3``::
  
@@ -175,24 +179,26 @@ riak_pipe_builder.erl
         {ok, Pid, Fitting} = riak_pipe_fitting_sup:add_fitting(
                                self(), Spec, Output, Options),             % riak_pipe_fitting を開始
         Ref = erlang:monitor(process, Pid),                                % riak_pipe_fitting を監視
-        {Fitting, Ref}.                                                    % {#fitting{pid, ref, chashfun, nval}, Ref} を返す
+        
+        {Fitting, Ref}.                                                    % {#fitting{pid, ref, chashfun, nval}, Ref}
                                                                            % pid は fitting の pid, ref は Sink の ref
 
         
 riak_pipe_fitting_sup.erl
-
-- riak_pipe_fitting の supervisor
+~~~~~~~~~~~~~~~~~~~~~~~~
+* riak_pipe_fitting の supervisor
         
 ``riak_pipe_fitting_sup:add_fitting/4``::
 
     add_fitting(Builder, Spec, Output, Options) ->
         ?DPF("Adding fitting for ~p", [Spec]),
-        supervisor:start_child(?SERVER, [Builder, Spec, Output, Options]). % riak_pipe_fitting を開始 -> supervisor の子プロセスとして追加
+        supervisor:start_child(?SERVER, [Builder, Spec, Output, Options]). % riak_pipe_fitting を開始
+                                                                           % supervisor の子プロセスとして追加
 
         
 riak_pipe_fitting.erl
-
-- gen_fsm
+~~~~~~~~~~~~~~~~~~~~~
+* gen_fsm として実装
 
 ``riak_pipe_fitting:init/1``::
 
@@ -227,12 +233,12 @@ riak_pipe_fitting.erl
 入力の送信
 ---------
 
-- クライアントは　``riak_pipe:queue_work/2`` を呼ぶ。
-- ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
-- ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
+* クライアントは　``riak_pipe:queue_work/2`` を呼ぶ。
+* ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
+* ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
 
 riak_pipe.erl
-
+~~~~~~~~~~~~~
 ``riak_pipe:queue_work/3``::
 
     queue_work(#pipe{fittings=[{_,Head}|_]}, Input, Timeout)
@@ -241,7 +247,7 @@ riak_pipe.erl
 
 
 riak_pipe_vnode.erl
-
+~~~~~~~~~~~~~~~~~~~
 ``riak_pipe:queue_work/4``::
 
     queue_work(#fitting{chashfun=follow}=Fitting,                              % Options を設定していない場合はこれが呼ばれる
@@ -259,10 +265,11 @@ riak_pipe_vnode.erl
         %% 1.0.x compatibility
         Hash = riak_pipe_fun:compat_apply(HashFun, [Input]),
         queue_work(Fitting, Input, Timeout, UsedPreflist, Hash).
-            
+
+        
 参考資料
 -------
 
-- Riak Pipe - Riak's Distributed Processing Framework - Bryan Fink, RICON2012
+* Riak Pipe - Riak's Distributed Processing Framework - Bryan Fink, RICON2012
     - http://vimeo.com/53910999#at=0
     - http://hobbyist.data.riakcs.net:8080/ricon-riak-pipe.pdf
