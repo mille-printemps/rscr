@@ -27,11 +27,11 @@ riak_pipe_app.erl
         %% startup mostly copied from riak_kv
         catch cluster_info:register_app(riak_pipe_cinfo),
 
-        case riak_pipe_sup:start_link() of                 % riak_pipe の supervisor を開始
+        case riak_pipe_sup:start_link() of             % riak_pipe の supervisor を開始
             {ok, Pid} ->
-                riak_core:register(riak_pipe, [
-                 {vnode_module, riak_pipe_vnode},
-                 {stat_mod, riak_pipe_stat}
+                riak_core:register(riak_pipe, [        % vnode module として riak_pipe_vnode を設定
+                 {vnode_module, riak_pipe_vnode},      % これにより vnode へのコマンドは 
+                 {stat_mod, riak_pipe_stat}            % riak_core_vnode を経由して riak_pipe_vnode で処理される
                 ]),
                 {ok, Pid};
             {error, Reason} ->
@@ -307,7 +307,8 @@ riak_pipe_fitting:init/1
 
 ::
 
-    ok = riak_pipe:queue_work(Pipe, "hello"),                        % riak_pipe:exec/2 から得た Pipe を渡して "hello" を送信
+    ok = riak_pipe:queue_work(Pipe, "hello"),                        % riak_pipe:exec/2 から得た Pipe を渡して
+                                                                     % "hello" を送信
     riak_pipe:eoi(Pipe).                                             % 入力の終了を fitting へ送信
 
     
@@ -382,6 +383,8 @@ riak_pipe_vnode:queue_work/4
 
         
 ``riak_pipe_vnode:queue_work_send/4``::
+
+* riak_core_vnode_master へ委譲して、fitting、入力、送信側の pid といった情報を vnode へ送る
         
         queue_work_send(#fitting{ref=Ref}=Fitting,
                     Input, Timeout,
@@ -390,9 +393,9 @@ riak_pipe_vnode:queue_work/4
             try riak_core_vnode_master:command_return_vnode(
                 {Index, Node},
                 #cmd_enqueue{fitting=Fitting, input=Input, timeout=Timeout,  
-                            usedpreflist=UsedPreflist},                      % fitting や入力の情報や 
-                {raw, Ref, self()},                                          % 送信側の pid を
-                riak_pipe_vnode_master) of                                   % vnode へ送る
+                            usedpreflist=UsedPreflist},
+                {raw, Ref, self()},                                          
+                riak_pipe_vnode_master) of                                   % vnode への情報の送信
 
                 {ok, VnodePid} ->
                     queue_work_wait(Ref, Index, VnodePid);
@@ -405,8 +408,183 @@ riak_pipe_vnode:queue_work/4
                     {error, {nodedown, Node}}
             end.
 
+            
+riak_core_vnode_master:command_return_vnode/4
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* riak_core_vnode_proxy へ委譲
+* riak_core_vnode_proxy:handle_call/3 で実際に vnode へ情報が送信される
+
+``riak_core_vnode_master:command_return_vnode/4``::
+
+        command_return_vnode({Index,Node}, Msg, Sender, VMaster) ->
+        
+            % Req=#riak_vnode_req_v1{index, sender, request=#cmd_enqueue{}}        
+            Req = make_request(Msg, Sender, Index),    
+            
+            case riak_core_capability:get({riak_core, vnode_routing}, legacy) of
+
+                % legacy の場合も riak_core_vnode_proxy:command_return_vnode/2 を呼んでいる
+                legacy ->
+                    gen_server:call({VMaster, Node}, {return_vnode, Req});    
+                    
+                proxy ->
+                     Mod = vmaster_to_vmod(VMaster),
+                     riak_core_vnode_proxy:command_return_vnode({Mod,Index,Node}, Req)   
+        end.
 
         
+``riak_core_vnode_master:handle_call/3``::
+
+    handle_call({return_vnode, Req}, _From, State) ->
+        {Pid, NewState} = get_vnode_pid(State),
+        
+        gen_fsm:send_event(Pid, Req),        % Req で示されるイベントを Pid で示される vnode へ送信
+        
+        {reply, {ok, Pid}, NewState};
+
+* vnode へ送信されるイベント
+
+%%% explanation
+        
+::
+
+    -type sender_type() :: fsm | server | raw.
+    -type sender() :: {sender_type(), reference(), pid()} |
+                       %% TODO: Double-check that these special cases are kosher
+                      {server, undefined, undefined} | % special case in
+                                                       % riak_core_vnode_master.erl
+                      {fsm, undefined, pid()} |        % special case in
+                                                       % riak_kv_util:make_request/2.erl
+                      ignore.
+    -type partition() :: non_neg_integer().
+    -type vnode_req() :: term().
+
+    -record(riak_vnode_req_v1, {
+          index :: partition(),
+          sender=ignore :: sender(),
+          request :: vnode_req()}).
+
+    vnode_req() = #cmd_enqueue{fitting=Fitting,
+                              input=Input,
+                              timeout=Timeout,
+                              usedpreflist=UsedPreflist}
+
+                              
+riak_core_vnode:handle_event/3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* riak_core_vnode のイベント・ハンドラーが呼ばれる
+* 上記の gen_fsm:send_event/2 により送信されたイベントに以下のハンドラーが適合する
+
+``riak_core_vnode:handle_event/3``::
+
+    ...
+    handle_event(R=?VNODE_REQ{}, _StateName, State) ->
+        active(R, State);
+    ...
+
+* handoff node が設定されているか否かにより、下記の riak_core_vnode:active/2 のどちらかが呼ばれる
+* いずれにしても riak_pipe_vnode:handle_command/3 が呼ばれる
+    
+``riak_core_vnode:active/2``::
+    
+    ...
+    active(?VNODE_REQ{sender=Sender, request=Request},
+        State=#state{handoff_node=HN}) when HN =:= none ->
+        vnode_command(Sender, Request, State);
+        
+    active(?VNODE_REQ{sender=Sender, request=Request},State) ->
+        vnode_handoff_command(Sender, Request, State);
+    ...
+
+``riak_core_vnode:vnode_command/3``::
+
+    vnode_command(Sender, Request, State=#state{index=Index,
+                                            mod=Mod,
+                                            modstate=ModState,
+                                            forward=Forward,
+                                            pool_pid=Pool}) ->
+        %% Check if we should forward
+        case Forward of
+            undefined ->
+                Action = Mod:handle_command(Request, Sender, ModState);
+            NextOwner ->
+                lager:debug("Forwarding ~p -> ~p: ~p~n", [node(), NextOwner, Index]),
+                riak_core_vnode_master:command({Index, NextOwner}, Request, Sender,
+                                           riak_core_vnode_master:reg_name(Mod)),
+                Action = continue
+        end,
+        case Action of
+            continue ->
+                continue(State, ModState);
+            {reply, Reply, NewModState} ->
+                reply(Sender, Reply),
+                continue(State, NewModState);
+            {noreply, NewModState} ->
+                continue(State, NewModState);
+            {async, Work, From, NewModState} ->
+                %% dispatch some work to the vnode worker pool
+                %% the result is sent back to 'From'
+                riak_core_vnode_worker_pool:handle_work(Pool, Work, From),
+                continue(State, NewModState);
+            {stop, Reason, NewModState} ->
+                {stop, Reason, State#state{modstate=NewModState}}
+        end.
+
+riak_pipe_vnode:handle_command/3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``riak_pipe_vnode:handle_command/3``::        
+
+    ...                                              
+    handle_command(#cmd_enqueue{}=Cmd, Sender, State) ->
+        enqueue_internal(Cmd, Sender, State);
+    ...
+
+``riak_pipe_vnode:enqueue_internal/3``::
+
+    enqueue_internal(#cmd_enqueue{fitting=Fitting, input=Input, timeout=TO,
+                              usedpreflist=UsedPreflist},
+                 Sender, #state{partition=Partition}=State) ->
+        case worker_for(Fitting, true, State) of
+            {ok, #worker{details=#fitting_details{module=riak_pipe_w_crash}}}
+              when Input == vnode_killer ->
+                %% this is used by the eunit test named "Vnode Death"
+                %% in riak_pipe:exception_test_; it kills the vnode before
+                %% it has a chance to reply to the queue request
+                exit({riak_pipe_w_crash, vnode_killer});
+            {ok, Worker} when (Worker#worker.details)#fitting_details.module
+                              /= ?FORWARD_WORKER_MODULE ->
+                case add_input(Worker, Input, Sender, TO, UsedPreflist) of
+                    {ok, NewWorker} ->
+                        ?T(NewWorker#worker.details, [queue],
+                           {vnode, {queued, Partition, Input}}),
+                        {reply, ok, replace_worker(NewWorker, State)};
+                    {queue_full, NewWorker} ->
+                        ?T(NewWorker#worker.details, [queue,queue_full],
+                           {vnode, {queue_full, Partition, Input}}),
+                        %% if the queue is full, hold up the producer
+                        %% until we're ready for more
+                        {noreply, replace_worker(NewWorker, State)};
+                    timeout ->
+                        {reply, {error, timeout}, replace_worker(Worker, State)}
+                end;
+            {ok, _RestartForwardingWorker} ->
+                %% this is a forwarding worker for a failed-restart
+                %% fitting - don't enqueue any more inputs, just reject
+                %% and let the requester enqueue elswhere
+                {reply, {error, forwarding}, State};
+            worker_limit_reached ->
+                %% TODO: log/trace this event
+                %% Except we don't have details here to associate with a trace
+                %% function: ?T_ERR(WhereToGetDetails, whatever_limit_hit_here),
+                {reply, {error, worker_limit_reached}, State};
+            worker_startup_failed ->
+                %% TODO: log/trace this event
+                {reply, {error, worker_startup_failed}, State}
+        end.
+
+    
+                              
 参考資料
 ========
 
