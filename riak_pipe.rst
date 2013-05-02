@@ -79,10 +79,15 @@ riak_pipe.erl
 -------------
 
 * クライアントの API を定義
+
 * クライアントが主に使用する API は以下のもの
+
     - riak_pipe:exec/2 -> pipeline の構築
+    
     - riak_pipe:queue_work -> 入力の送信
+    
     - riak_pipe:collect_results/1, riak_pipe:collect_result/1 -> 結果の受信
+    
 * 簡単なサンプルの実装あり。
 
 
@@ -92,15 +97,23 @@ pipeline の構築
 riak_pipe:exec/2
 ~~~~~~~~~~~~~~~~
 * riak_pipe_builder を使って pipeline を構築する
+
     - riak_pipe_builder を開始
+    
     - riak_pipe_fitting を開始
+    
     - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
+    
         + supervisor が落ちて再開されても子プロセスは自動的に再開されない
+        
         + riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
+        
 * #pipe{} を返す
+
 * サンプル - riak_pipe:example_start/0 より
 
 ::
+
     {ok, Pipe} = riak_pipe:exec(
                 [#fitting_spec{name=empty_pass,
                      module=riak_pipe_w_pass,
@@ -129,6 +142,7 @@ riak_pipe_builder_sup:new_pipeline/2
 * #pipe{} を返す
 
 ::
+
     -record(pipe,
         {
           builder :: pid(),
@@ -168,8 +182,11 @@ riak_pipe_builder_sup:new_pipeline/2
 riak_pipe_builder:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~
 * riak_pipe_builder は gen_fsm として実装されている
+
 * Sink を開始する
+
 * Fitting を開始する
+
 * #pipe{} を生成
 
 ``riak_pipe_builder:init/1``::
@@ -239,7 +256,9 @@ riak_pipe_fitting_sup:add_fitting/4
 riak_pipe_fitting:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~
 * riak_pipe_fitting は gen_fsm として実装されている
+
 * riak_pipe:exec/2 で渡された #fitting_spec{} を保持する
+
 * 状態を wait_upstream_eoi に遷移させる
 
 ``riak_pipe_fitting:init/1``::
@@ -279,11 +298,15 @@ riak_pipe_fitting:init/1
 ----------
 
 * ``riak_pipe:queue_work/2`` により fitting へ入力を送信。
+
 * ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
+
 * ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
+
 * サンプル - riak_pipe:example_send/1 より
 
 ::
+
     ok = riak_pipe:queue_work(Pipe, "hello"),                        % riak_pipe:exec/2 から得た Pipe を渡して "hello" を送信
     riak_pipe:eoi(Pipe).                                             % 入力の終了を fitting へ送信
 
@@ -299,10 +322,14 @@ riak_pipe:queue_work/3
         
 riak_pipe_vnode:queue_work/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Spec に設定された hash 関数に基づいて vnode 
+
+* hash 関数による入力の分散の例は参考資料を参照
+
 ``riak_pipe_vnode:queue_work/4``::
 
-    queue_work(#fitting{chashfun=follow}=Fitting,                    % Options を設定していない場合
-               Input, Timeout, UsedPreflist) ->
+    queue_work(#fitting{chashfun=follow}=Fitting,                    % デフォルトの場合(Option が [])もしくは
+               Input, Timeout, UsedPreflist) ->                      % hash 関数に follow が設定されていた場合
         queue_work(Fitting, Input, Timeout, UsedPreflist, any_local_vnode());
         
     queue_work(#fitting{chashfun={Module, Function}}=Fitting,        % hash 関数が設定されていた場合
@@ -321,8 +348,67 @@ riak_pipe_vnode:queue_work/4
         queue_work(Fitting, Input, Timeout, UsedPreflist, Hash).
 
         
+``riak_pipe_vnode:queue_work/5``::
+
+    queue_work(Fitting, Input, Timeout, UsedPreflist, Hash) ->
+        queue_work_erracc(Fitting, Input, Timeout, UsedPreflist, Hash, []). % queue_work_erracc へ委譲
+
+        
+``riak_pipe_vnode:queue_work_erracc/6``::
+
+    queue_work_erracc(#fitting{nval=NVal}=Fitting,
+        Input, Timeout, UsedPreflist, Hash, ErrAcc) ->
+        
+        case remaining_preflist(Input, Hash, NVal, UsedPreflist) of         % riak_core へ委譲して 
+            [NextPref|_] ->                                                 % vnode のリストを取得
+                case queue_work_send(Fitting, Input, Timeout,
+                                     [NextPref|UsedPreflist]) of            % 入力を vnode へ送信
+                    ok -> ok;
+                    {error, Error} ->
+                        queue_work_erracc(Fitting, Input, Timeout,
+                                          [NextPref|UsedPreflist], Hash,
+                                          [Error|ErrAcc])
+                end;
+            [] ->
+                if ErrAcc == [] ->
+                        %% may happen if a fitting worker asks to forward
+                        %% the input, but there is no more preflist to
+                        %% forward to
+                        {error, [preflist_exhausted]};
+                   true ->
+                        {error, ErrAcc}
+                end
+        end.
+
+        
+``riak_pipe_vnode:queue_work_send/4``::
+        
+        queue_work_send(#fitting{ref=Ref}=Fitting,
+                    Input, Timeout,
+                    [{Index,Node}|_]=UsedPreflist) ->
+                    
+            try riak_core_vnode_master:command_return_vnode(
+                {Index, Node},
+                #cmd_enqueue{fitting=Fitting, input=Input, timeout=Timeout,  
+                            usedpreflist=UsedPreflist},                      % fitting や入力の情報や 
+                {raw, Ref, self()},                                          % 送信側の pid を
+                riak_pipe_vnode_master) of                                   % vnode へ送る
+
+                {ok, VnodePid} ->
+                    queue_work_wait(Ref, Index, VnodePid);
+                    
+                {error, timeout} ->
+                    {error, {vnode_proxy_timeout, {Index, Node}}}
+                    
+            catch exit:{{nodedown, Node}, _GenServerCall} ->
+                    %% node died between services check and gen_server:call
+                    {error, {nodedown, Node}}
+            end.
+
+
+        
 参考資料
--------
+========
 
 * Riak Pipe - Riak's Distributed Processing Framework - Bryan Fink, RICON2012
     - http://vimeo.com/53910999#at=0
