@@ -78,14 +78,14 @@ riak_pipe_sup.erl
 riak_pipe.erl
 -------------
 
-* クライアントの API を定義
-* クライアントが主に使用する API は以下のもの
+- クライアントの API を定義
+- クライアントが主に使用する API は以下のもの
 
     - riak_pipe:exec/2 -> pipeline の構築
     - riak_pipe:queue_work -> 入力の送信
     - riak_pipe:collect_results/1, riak_pipe:collect_result/1 -> 結果の受信
     
-* 簡単なサンプルの実装あり。
+- 簡単なサンプルの実装あり。
 
 
 pipeline の構築
@@ -93,18 +93,18 @@ pipeline の構築
 
 riak_pipe:exec/2
 ~~~~~~~~~~~~~~~~
-* riak_pipe_builder を使って pipeline を構築する
+- riak_pipe_builder を使って pipeline を構築する
 
     - riak_pipe_builder を開始
     - riak_pipe_fitting を開始
     - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
     
-        + supervisor が落ちて再開されても子プロセスは自動的に再開されない
-        + riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
+        - supervisor が落ちて再開されても子プロセスは自動的に再開されない
+        - riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
         
-* #pipe{} を返す
+- #pipe{} を返す
 
-* サンプル - riak_pipe:example_start/0 より
+- サンプル - riak_pipe:example_start/0 より
 
 ::
 
@@ -131,9 +131,9 @@ riak_pipe:exec/2
 
 riak_pipe_builder_sup:new_pipeline/2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* riak_pipe_builder を開始
-* riak_pipe_builder に pipeline イベントを送信
-* #pipe{} を返す
+- riak_pipe_builder を開始
+- riak_pipe_builder に pipeline イベントを送信
+- #pipe{} を返す
 
 ::
 
@@ -175,10 +175,11 @@ riak_pipe_builder_sup:new_pipeline/2
         
 riak_pipe_builder:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~
-* riak_pipe_builder は gen_fsm として実装されている
-* Sink を開始する
-* Fitting を開始する
-* #pipe{} を生成
+
+- riak_pipe_builder は gen_fsm として実装されている
+- Sink を開始する
+- Fitting を開始する
+- #pipe{} を生成
 
 ``riak_pipe_builder:init/1``::
 
@@ -235,7 +236,8 @@ riak_pipe_builder:init/1
         
 riak_pipe_fitting_sup:add_fitting/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* riak_pipe_fitting を開始する
+
+- riak_pipe_fitting を開始する
         
 ``riak_pipe_fitting_sup:add_fitting/4``::
 
@@ -246,9 +248,10 @@ riak_pipe_fitting_sup:add_fitting/4
 
 riak_pipe_fitting:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~
-* riak_pipe_fitting は gen_fsm として実装されている
-* riak_pipe:exec/2 で渡された #fitting_spec{} を保持する
-* 状態を wait_upstream_eoi に遷移させる
+
+- riak_pipe_fitting は gen_fsm として実装されている
+- riak_pipe:exec/2 で渡された #fitting_spec{} を保持する
+- 状態を wait_upstream_eoi に遷移させる
 
 ``riak_pipe_fitting:init/1``::
 
@@ -286,10 +289,10 @@ riak_pipe_fitting:init/1
 入力の送信
 ----------
 
-* ``riak_pipe:queue_work/2`` により fitting へ入力を送信。
-* ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
-* ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
-* サンプル - riak_pipe:example_send/1 より
+- ``riak_pipe:queue_work/2`` により fitting へ入力を送信。
+- ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
+- ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
+- サンプル - riak_pipe:example_send/1 より
 
 ::
 
@@ -300,6 +303,7 @@ riak_pipe_fitting:init/1
     
 riak_pipe:queue_work/3
 ~~~~~~~~~~~~~~~~~~~~~~
+
 ``riak_pipe:queue_work/3``::
 
     queue_work(#pipe{fittings=[{_,Head}|_]}, Input, Timeout)
@@ -309,8 +313,9 @@ riak_pipe:queue_work/3
         
 riak_pipe_vnode:queue_work/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* Spec に設定された hash 関数に基づいて vnode 
-* hash 関数による入力の分散の例は参考資料を参照
+
+- Spec に設定された hash 関数に基づいて vnode 
+- hash 関数による入力の分散の例は参考資料を参照
 
 ``riak_pipe_vnode:queue_work/4``::
 
@@ -366,21 +371,21 @@ riak_pipe_vnode:queue_work/4
                 end
         end.
 
+
+- riak_core_vnode_master へ委譲して、fitting、入力、送信側の pid といった情報を vnode へ送る        
         
 ``riak_pipe_vnode:queue_work_send/4``::
 
-* riak_core_vnode_master へ委譲して、fitting、入力、送信側の pid といった情報を vnode へ送る
-        
-        queue_work_send(#fitting{ref=Ref}=Fitting,
-                    Input, Timeout,
-                    [{Index,Node}|_]=UsedPreflist) ->
+    queue_work_send(#fitting{ref=Ref}=Fitting,
+                Input, Timeout,
+                [{Index,Node}|_]=UsedPreflist) ->
                     
-            try riak_core_vnode_master:command_return_vnode(
-                {Index, Node},
-                #cmd_enqueue{fitting=Fitting, input=Input, timeout=Timeout,  
-                            usedpreflist=UsedPreflist},
-                {raw, Ref, self()},                                          
-                riak_pipe_vnode_master) of                                   % vnode への情報の送信
+        try riak_core_vnode_master:command_return_vnode(
+            {Index, Node},
+            #cmd_enqueue{fitting=Fitting, input=Input, timeout=Timeout,  
+                        usedpreflist=UsedPreflist},
+            {raw, Ref, self()},                                          
+            riak_pipe_vnode_master) of                                   % vnode への情報の送信
 
                 {ok, VnodePid} ->
                     queue_work_wait(Ref, Index, VnodePid);
@@ -388,16 +393,17 @@ riak_pipe_vnode:queue_work/4
                 {error, timeout} ->
                     {error, {vnode_proxy_timeout, {Index, Node}}}
                     
-            catch exit:{{nodedown, Node}, _GenServerCall} ->
-                    %% node died between services check and gen_server:call
-                    {error, {nodedown, Node}}
-            end.
+        catch exit:{{nodedown, Node}, _GenServerCall} ->
+                %% node died between services check and gen_server:call
+                {error, {nodedown, Node}}
+        end.
 
             
 riak_core_vnode_master:command_return_vnode/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* riak_core_vnode_proxy へ委譲
-* riak_core_vnode_proxy:handle_call/3 で実際に vnode へ情報が送信される
+
+- riak_core_vnode_proxy へ委譲
+- riak_core_vnode_proxy:handle_call/3 で実際に vnode へ情報が送信される
 
 ``riak_core_vnode_master:command_return_vnode/4``::
 
@@ -427,7 +433,7 @@ riak_core_vnode_master:command_return_vnode/4
         
         {reply, {ok, Pid}, NewState};
 
-* vnode へ送信されるイベント
+- vnode へ送信されるイベント
 
 %%% explanation
         
@@ -459,8 +465,9 @@ riak_core_vnode_master:command_return_vnode/4
                               
 riak_core_vnode:handle_event/3
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* riak_core_vnode のイベント・ハンドラーが呼ばれる
-* 上記の gen_fsm:send_event/2 により送信されたイベントに以下のハンドラーが適合する
+
+- riak_core_vnode のイベント・ハンドラーが呼ばれる
+- 上記の gen_fsm:send_event/2 により送信されたイベントに以下のハンドラーが適合する
 
 ``riak_core_vnode:handle_event/3``::
 
@@ -469,8 +476,8 @@ riak_core_vnode:handle_event/3
         active(R, State);
     ...
     
-* handoff node が設定されているか否かにより、下記の riak_core_vnode:active/2 のどちらかが呼ばれる
-* いずれにしても riak_pipe_vnode:handle_command/3 が呼ばれる
+- handoff node が設定されているか否かにより、下記の riak_core_vnode:active/2 のどちらかが呼ばれる
+- いずれにしても riak_pipe_vnode:handle_command/3 が呼ばれる
     
 ``riak_core_vnode:active/2``::
     
@@ -522,7 +529,7 @@ riak_core_vnode:handle_event/3
 riak_pipe_vnode:handle_command/3
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* Request には #cmd_enqueue が指定されているので、下記の関数が適合する
+- Request には #cmd_enqueue が指定されているので、下記の関数が適合する
 
 
 ``riak_pipe_vnode:handle_command/3``::        
@@ -532,7 +539,7 @@ riak_pipe_vnode:handle_command/3
         enqueue_internal(Cmd, Sender, State);
     ...
 
-* worker を生成して入力を worker のキューへ追加する
+- worker を生成して入力を worker のキューへ追加する
     
 ``riak_pipe_vnode:enqueue_internal/3``::
 
