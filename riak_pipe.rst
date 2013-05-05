@@ -52,25 +52,39 @@ riak_pipe_sup.erl
         riak_core_capability:register(
           {riak_pipe, trace_format}, [ordsets, sets], sets),
 
-        VMaster = {riak_pipe_vnode_master,                                 % riak_core_vnode_master を開始
+        % riak_core_vnode_master を開始
+        %　wait_for_service へ遷移
+        
+        VMaster = {riak_pipe_vnode_master,                             
                    {riak_core_vnode_master, start_link, [riak_pipe_vnode]},
                    permanent, 5000, worker, [riak_core_vnode_master]},
-                   
-        BSup = {riak_pipe_builder_sup,                                     % riak_pipe_builder の supervisor を開始
-                {riak_pipe_builder_sup, start_link, []},                   % restart strategy が simple_one_for_one
-                   permanent, 5000, supervisor, [riak_pipe_builder_sup]},  % riak_pipe_builder は start_child/2 で開始
-                                                                           % 以下の supervisor も同様
-                   
-        FSup = {riak_pipe_fitting_sup,                                     % riak_pipe_fitting の supervisor を開始
+
+        % riak_pipe_builder の supervisor を開始
+        % restart strategy は simple_one_for_one
+        % riak_pipe_builder は start_child/2 で開始
+        % 以下の supervisor も同様
+        
+        BSup = {riak_pipe_builder_sup,                                 
+                {riak_pipe_builder_sup, start_link, []},               
+                   permanent, 5000, supervisor, [riak_pipe_builder_sup]},  
+                                                                       
+        % riak_pipe_fitting の supervisor を開始
+        
+        FSup = {riak_pipe_fitting_sup,                                 
                 {riak_pipe_fitting_sup, start_link, []},                     
                 permanent, 5000, supervisor, [riak_pipe_fitting_sup]},       
-                
-        CSup = {riak_pipe_qcover_sup,                                      % riak_qcover の supervisor を開始
+
+        % riak_qcover の supervisor を開始
+        
+        CSup = {riak_pipe_qcover_sup,                                  
                 {riak_pipe_qcover_sup, start_link, []},                      
                 permanent, 5000, supervisor, [riak_pipe_qcover_sup]},        
-                
-        {ok, { {one_for_one, 5, 10}, [VMaster, BSup, FSup, CSup]} }.       % one_for_one
-                                                                           % 子プロセスが落ちた場合そのプロセスのみ再開
+
+        % one_for_one
+        % 子プロセスが落ちた場合そのプロセスのみ再開
+        
+        {ok, { {one_for_one, 5, 10}, [VMaster, BSup, FSup, CSup]} }.   
+                                                                       
 
 クライアント
 ============
@@ -81,28 +95,15 @@ riak_pipe.erl
 - クライアントの API を定義
 - クライアントが主に使用する API は以下のもの
 
-    - riak_pipe:exec/2 -> pipeline の構築
-    - riak_pipe:queue_work -> 入力の送信
-    - riak_pipe:collect_results/1, riak_pipe:collect_result/1 -> 結果の受信
+  - riak_pipe:exec/2 == pipeline の構築
+  - riak_pipe:queue_work == データの送信
+  - riak_pipe:collect_results/1, riak_pipe:collect_result/1 == 結果の受信
     
 - 簡単なサンプルの実装あり。
 
 
 pipeline の構築
 ---------------
-
-riak_pipe:exec/2
-~~~~~~~~~~~~~~~~
-- riak_pipe_builder を使って pipeline を構築する
-
-    - riak_pipe_builder を開始
-    - riak_pipe_fitting を開始
-    - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
-    
-        - supervisor が落ちて再開されても子プロセスは自動的に再開されない
-        - riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
-        
-- #pipe{} を返す
 
 - サンプル - riak_pipe:example_start/0 より
 
@@ -116,24 +117,40 @@ riak_pipe:exec/2
                  {trace, all}]).
 
 
+riak_pipe:exec/2
+~~~~~~~~~~~~~~~~
+- riak_pipe_builder を使って pipeline を構築する
+
+  - riak_pipe_builder を開始
+  - riak_pipe_fitting を開始
+  - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
+    
+    - supervisor が落ちて再開されても子プロセスは自動的に再開されない
+    - riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
+        
+- #pipe{} を返す
+
 ``riak_pipe:exec/2``::
 
     exec(Spec, Options) ->
         [ riak_pipe_fitting:validate_fitting(F) || F <- Spec ],
         CorrectOptions = correct_trace(
                            validate_sink_type(
-                             ensure_sink(Options))),             % Options が [] であった場合は生成される
-                                                                 % [{sink, #fitting{pid=self(), ref=make_ref(), chashfun=sink}}]
-                                                                 % となるので、Sink はクライアントプロセスになる
+                             ensure_sink(Options))),     % Options が [] であった場合は生成される
+                                                         % [{sink, #fitting{pid=self(), ref=make_ref(), chashfun=sink}}]
+                                                         % となるので、Sink はクライアントプロセスになる
                                                               
-    riak_pipe_builder_sup:new_pipeline(Spec, CorrectOptions).    % pipeline を構築
+    riak_pipe_builder_sup:new_pipeline(Spec, CorrectOptions).　%　==>
 
-
+    
 riak_pipe_builder_sup:new_pipeline/2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- riak_pipe_builder を開始
-- riak_pipe_builder に pipeline イベントを送信
-- #pipe{} を返す
+
+- supervisor として pipeline を構築する riak_pipe_builder を生成する
+
+  - riak_pipe_builder を開始
+  - riak_pipe_builder に pipeline イベントを送信
+  - #pipe{} を返す
 
 ::
 
@@ -148,8 +165,8 @@ riak_pipe_builder_sup:new_pipeline/2
         {
           pid :: pid(),                            % fitting の pid
           ref :: reference(),                      % fitting の reference
-          chashfun :: riak_pipe_vnode:chashfun(),  % 入力をどのように vnode へ分散させるかを決める hash 関数
-          nval :: riak_pipe_vnode:nval()           % 入力を処理する vnode の最大数
+          chashfun :: riak_pipe_vnode:chashfun(),  % データをどのように vnode へ分散させるかを決める hash 関数
+          nval :: riak_pipe_vnode:nval()           % データを処理する vnode の最大数
         }).
  
 
@@ -157,12 +174,12 @@ riak_pipe_builder_sup:new_pipeline/2
 
     new_pipeline(Spec, Options) ->
         case supervisor:start_child(?MODULE, [Spec, Options]) of % riak_pipe_builder を開始して
-                                                                 % supervisor の子プロセスとして追加
+                                                                 % supervisor の子プロセスとして追加　==>
             {ok, Pid, Ref} ->
                 case riak_pipe_builder:pipeline(Pid) of          % pipeline イベントを送信       
                     {ok, #pipe{sink=#fitting{ref=Ref}}=Pipe} ->
                         riak_pipe_stat:update({create, Pid}),    % 統計情報を収集
-                        {ok, Pipe};                              % #pipe{} を返す -> exec の返り値
+                        {ok, Pipe};                              % #pipe{} を返す == exec の返り値
                     _ ->
                         riak_pipe_stat:update(create_error),
                         {error, startup_failure}
@@ -176,82 +193,95 @@ riak_pipe_builder_sup:new_pipeline/2
 riak_pipe_builder:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
+- pipeline を構築する
+
+  - Sink を開始する
+  - Fitting を開始する
+  - #pipe{} を生成
+ 
 - riak_pipe_builder は gen_fsm として実装されている
-- Sink を開始する
-- Fitting を開始する
-- #pipe{} を生成
 
 ``riak_pipe_builder:init/1``::
 
     init([Spec, Options]) ->
         {sink, #fitting{ref=Ref}=Sink} = lists:keyfind(sink, 1, Options),
         
-        SinkMon = erlang:monitor(process, Sink#fitting.pid),               % Sink を監視
+        SinkMon = erlang:monitor(process, Sink#fitting.pid),       % Sink を監視
         
-        Fittings = start_fittings(Spec, Options),                          % Spec に指定された Fitting を開始
+        Fittings = start_fittings(Spec, Options),                  % Spec に指定された Fitting を開始
         NamedFittings = lists:zip(
                           [ N || #fitting_spec{name=N} <- Spec ],
-                          [ F || {F, _R} <- Fittings ]),                   % [{<spec name>, #fitting{pid, ref, chashfun, nval}}, ...] を返す
+                          [ F || {F, _R} <- Fittings ]),           % [{<spec name>, #fitting{pid, ref, chashfun, nval}}, ...] を返す
                           
         Pipe = #pipe{builder=self(),
                      fittings=NamedFittings,
-                     sink=Sink},                                           % exec の返り値となる #pipe{} を生成
+                     sink=Sink},                                   % exec の返り値となる #pipe{} を生成
                      
         put(eunit, [{module, ?MODULE},
                     {ref, Ref},
                     {spec, Spec},
                     {options, Options},
-                    {fittings, Fittings}]),                                % pipe の情報を process dictionary へ格納
-                                                                           % unit test に使う?
+                    {fittings, Fittings}]),                        % pipe の情報を process dictionary へ格納
+                                                                   % unit test に使う?
         {ok, wait_pipeline_shutdown,
         #state{options=Options,
                 pipe=Pipe,
                 alive=Fittings,
-                sinkmon=SinkMon}}.                                         % wait_pipeline_shutdown へ遷移
+                sinkmon=SinkMon}}.                                 % wait_pipeline_shutdown へ遷移
 
                 
 ``riak_pipe_builder:start_fittings/2``::
 
     start_fittings(Spec, Options) ->
-        [Tail|Rest] = lists:reverse(Spec),                                 % Spec のリストを反転
+        [Tail|Rest] = lists:reverse(Spec),                         % Spec のリストを反転
+        
         ClientOutput = client_output(Options),
+        
         lists:foldl(fun(FitSpec, [{Output,_}|_]=Acc) ->
                             [start_fitting(FitSpec, Output, Options)|Acc]
                     end,
                     [start_fitting(Tail, ClientOutput, Options)],
-                    Rest).                                                 % 反転した Spec に順に start_fitting/3 を適用
-                                                                           % [#fitting{pid, ref, chashfun, nval}, Ref}, ...] 
+                    Rest).                                         % 反転した Spec に順に start_fitting/3 を適用
+                                                                   % #fitting{} とその reference のタプルのリストを返す
+                                                                   % [{#fitting{pid, ref, chashfun, nval}, Ref}, ...] 
 
 ``riak_pipe_builder:start_fitting/3``::
  
     start_fitting(Spec, Output, Options) ->
         ?DPF("Starting fitting for ~p", [Spec]),
-        {ok, Pid, Fitting} = riak_pipe_fitting_sup:add_fitting(
-                               self(), Spec, Output, Options),             % riak_pipe_fitting を開始
-        Ref = erlang:monitor(process, Pid),                                % riak_pipe_fitting を監視
         
-        {Fitting, Ref}.                                                    % {#fitting{pid, ref, chashfun, nval}, Ref}
-                                                                           % pid は fitting の pid
-                                                                           % ref は自分の次の fitting の ref
+        {ok, Pid, Fitting} = riak_pipe_fitting_sup:add_fitting(
+                               self(), Spec, Output, Options),     % riak_pipe_fitting を開始 ==>
+                               
+        Ref = erlang:monitor(process, Pid),                        % riak_pipe_fitting を監視
+        
+        {Fitting, Ref}.                                            % {#fitting{pid, ref, chashfun, nval}, Ref}
+                                                                   % pid は fitting の pid
+                                                                   % ref は自分の次の fitting の reference
         
 riak_pipe_fitting_sup:add_fitting/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- riak_pipe_fitting を開始する
+- riak_pipe_fitting の supervisor として riak_pipe_fitting を生成する
+
+  - riak_pipe_fitting を生成
         
 ``riak_pipe_fitting_sup:add_fitting/4``::
 
     add_fitting(Builder, Spec, Output, Options) ->
         ?DPF("Adding fitting for ~p", [Spec]),
-        supervisor:start_child(?SERVER, [Builder, Spec, Output, Options]). % riak_pipe_fitting を開始
+        supervisor:start_child(?SERVER, [Builder, Spec, Output, Options]). % riak_pipe_fitting を開始 ==>
                                                                            % supervisor の子プロセスとして追加
 
 riak_pipe_fitting:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
+- riak_pipe_fitting を生成
+
+  - riak_pipe:exec/2 で渡された #fitting_spec{} を保持する
+  - 状態を wait_upstream_eoi に遷移させる
+  
 - riak_pipe_fitting は gen_fsm として実装されている
-- riak_pipe:exec/2 で渡された #fitting_spec{} を保持する
-- 状態を wait_upstream_eoi に遷移させる
 
 ``riak_pipe_fitting:init/1``::
 
@@ -260,18 +290,18 @@ riak_pipe_fitting:init/1
           Output,
           Options]) ->
         Fitting = fitting_record(self(), Spec, Output),
-        Details = #fitting_details{fitting=Fitting,
+        Details = #fitting_details{fitting=Fitting,               % 自分の #fitting{} を保持
                                    name=Name,
                                    module=Module,
                                    arg=Arg,
-                                   output=Output,
+                                   output=Output,                 % 次の fitting の #fitting{} を保持
                                    options=Options,
-                                   q_limit=QLimit},                  % #fitting_spec{} を保持
+                                   q_limit=QLimit},               
 
-        ?T(Details, [], {fitting, init_started}),                    % riak_pipe_log.hrl に定義されているマクロ
-                                                                     % riak_pipe_log:trace/3 を呼び出している
+        ?T(Details, [], {fitting, init_started}),                 % riak_pipe_log.hrl に定義されているマクロ
+                                                                  % riak_pipe_log:trace/3 を呼び出している
                                                                      
-        erlang:monitor(process, Builder),                            % riak_pipe_builder を監視
+        erlang:monitor(process, Builder),                         % riak_pipe_builder を監視
 
         ?T(Details, [], {fitting, init_finished}),
 
@@ -282,23 +312,30 @@ riak_pipe_fitting:init/1
                     
         {ok, wait_upstream_eoi,
          #state{builder=Builder, details=Details, workers=[],
-            ref=Output#fitting.ref}}.                                % wait_upstream_eoi へ遷移
+            ref=Output#fitting.ref}}.                             % wait_upstream_eoi へ遷移
 
-%% summary
             
-入力の送信
+プロセスのモニタリング構成
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. image ./riak_pipe_monitors.png
+
+            
+データの送信
 ----------
 
-- ``riak_pipe:queue_work/2`` により fitting へ入力を送信。
-- ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
-- ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
 - サンプル - riak_pipe:example_send/1 より
 
 ::
 
     ok = riak_pipe:queue_work(Pipe, "hello"),                        % riak_pipe:exec/2 から得た Pipe を渡して
                                                                      % "hello" を送信
-    riak_pipe:eoi(Pipe).                                             % 入力の終了を fitting へ送信
+    riak_pipe:eoi(Pipe).                                             % データ入力の終了を fitting へ送信
+
+
+- ``riak_pipe:queue_work/2`` により fitting へデータを送信。
+- ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
+- ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
 
     
 riak_pipe:queue_work/3
@@ -309,19 +346,19 @@ riak_pipe:queue_work/3
     queue_work(#pipe{fittings=[{_,Head}|_]}, Input, Timeout)
       when Timeout =:= infinity; Timeout =:= noblock ->
         riak_pipe_vnode:queue_work(Head, Input, Timeout).            % 先頭の fitting (#fitting{}) を渡して
-                                                                     % riak_pipe_vnode:queue_work/3 を呼ぶ
+                                                                     % riak_pipe_vnode:queue_work/3 を呼ぶ ==>
         
 riak_pipe_vnode:queue_work/4
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Spec に設定された hash 関数に基づいて vnode 
-- hash 関数による入力の分散の例は参考資料を参照
+- Spec に設定された hash 関数に基づいて vnode を決定
+- hash 関数によるデータの分散の例は参考資料を参照
 
 ``riak_pipe_vnode:queue_work/4``::
 
     queue_work(#fitting{chashfun=follow}=Fitting,                    % デフォルトの場合(Option が [])もしくは
                Input, Timeout, UsedPreflist) ->                      % hash 関数に follow が設定されていた場合
-        queue_work(Fitting, Input, Timeout, UsedPreflist, any_local_vnode());
+        queue_work(Fitting, Input, Timeout, UsedPreflist, any_local_vnode());  % ==>
         
     queue_work(#fitting{chashfun={Module, Function}}=Fitting,        % hash 関数が設定されていた場合
            Input, Timeout, UsedPreflist) ->
@@ -342,7 +379,7 @@ riak_pipe_vnode:queue_work/4
 ``riak_pipe_vnode:queue_work/5``::
 
     queue_work(Fitting, Input, Timeout, UsedPreflist, Hash) ->
-        queue_work_erracc(Fitting, Input, Timeout, UsedPreflist, Hash, []). % queue_work_erracc へ委譲
+        queue_work_erracc(Fitting, Input, Timeout, UsedPreflist, Hash, []). % queue_work_erracc へ委譲 ==>
 
         
 ``riak_pipe_vnode:queue_work_erracc/6``::
@@ -353,7 +390,7 @@ riak_pipe_vnode:queue_work/4
         case remaining_preflist(Input, Hash, NVal, UsedPreflist) of         % riak_core へ委譲して 
             [NextPref|_] ->                                                 % vnode のリストを取得
                 case queue_work_send(Fitting, Input, Timeout,
-                                     [NextPref|UsedPreflist]) of            % 入力を vnode へ送信
+                                     [NextPref|UsedPreflist]) of            % データを vnode へ送信 ==>
                     ok -> ok;
                     {error, Error} ->
                         queue_work_erracc(Fitting, Input, Timeout,
@@ -372,7 +409,7 @@ riak_pipe_vnode:queue_work/4
         end.
 
 
-- riak_core_vnode_master へ委譲して、fitting、入力、送信側の pid といった情報を vnode へ送る        
+- riak_core_vnode_master へ委譲して、fitting、データ、riak_pipe_vnode の pid といった情報を riak_core_vnode へ送る        
         
 ``riak_pipe_vnode:queue_work_send/4``::
 
@@ -385,7 +422,7 @@ riak_pipe_vnode:queue_work/4
             #cmd_enqueue{fitting=Fitting, input=Input, timeout=Timeout,  
                         usedpreflist=UsedPreflist},
             {raw, Ref, self()},                                          
-            riak_pipe_vnode_master) of                                   % vnode への情報の送信
+            riak_pipe_vnode_master) of                                   % riak_core_vnode への情報の送信 ==>
 
                 {ok, VnodePid} ->
                     queue_work_wait(Ref, Index, VnodePid);
@@ -409,12 +446,15 @@ riak_core_vnode_master:command_return_vnode/4
 
         command_return_vnode({Index,Node}, Msg, Sender, VMaster) ->
         
-            % Req=#riak_vnode_req_v1{index, sender, request=#cmd_enqueue{}}        
+            % Req=#riak_vnode_req_v1{index, sender, request=#cmd_enqueue{}}
+            
             Req = make_request(Msg, Sender, Index),    
             
             case riak_core_capability:get({riak_core, vnode_routing}, legacy) of
 
                 % legacy の場合も riak_core_vnode_proxy:command_return_vnode/2 を呼んでいる
+                % riak_core_vnode_master:handle_call/2 が呼ばれる ==>
+                
                 legacy ->
                     gen_server:call({VMaster, Node}, {return_vnode, Req});    
                     
@@ -429,13 +469,11 @@ riak_core_vnode_master:command_return_vnode/4
     handle_call({return_vnode, Req}, _From, State) ->
         {Pid, NewState} = get_vnode_pid(State),
         
-        gen_fsm:send_event(Pid, Req),        % Req で示されるイベントを Pid で示される vnode へ送信
+        gen_fsm:send_event(Pid, Req),        % Req で示されるイベントを Pid で示される riak_core_vnode へ送信 ==>
         
         {reply, {ok, Pid}, NewState};
 
-- vnode へ送信されるイベント
-
-%%% explanation
+- riak_core_vnode へ送信されるイベント #riak_vnode_req_v1{} は以下の通り
         
 ::
 
@@ -452,13 +490,13 @@ riak_core_vnode_master:command_return_vnode/4
 
     -record(riak_vnode_req_v1, {
           index :: partition(),
-          sender=ignore :: sender(),
+          sender=ignore :: sender(),                   % sender は riak_pipe_vnode 
           request :: vnode_req()}).
 
 ::
           
-    vnode_req() = #cmd_enqueue{fitting=Fitting,
-                              input=Input,
+    vnode_req() = #cmd_enqueue{fitting=Fitting,        % #fitting{}
+                              input=Input,             % 送信されたデータ
                               timeout=Timeout,
                               usedpreflist=UsedPreflist}
 
@@ -473,7 +511,7 @@ riak_core_vnode:handle_event/3
 
     ...
     handle_event(R=?VNODE_REQ{}, _StateName, State) ->
-        active(R, State);
+        active(R, State);                                  % ==>
     ...
     
 - handoff node が設定されているか否かにより、下記の riak_core_vnode:active/2 のどちらかが呼ばれる
@@ -484,7 +522,7 @@ riak_core_vnode:handle_event/3
     ...
     active(?VNODE_REQ{sender=Sender, request=Request},
         State=#state{handoff_node=HN}) when HN =:= none ->
-        vnode_command(Sender, Request, State);
+        vnode_command(Sender, Request, State);             % ==>
         
     active(?VNODE_REQ{sender=Sender, request=Request},State) ->
         vnode_handoff_command(Sender, Request, State);
@@ -501,7 +539,7 @@ riak_core_vnode:handle_event/3
         case Forward of
             undefined ->
                 Action = Mod:handle_command(Request, Sender, ModState);    % Mod は riak_pipe_app:start/2 で設定された
-                                                                           % riak_pipe_vnode
+                                                                           % riak_pipe_vnode ==>
                 
             NextOwner ->
                 lager:debug("Forwarding ~p -> ~p: ~p~n", [node(), NextOwner, Index]),
@@ -526,20 +564,20 @@ riak_core_vnode:handle_event/3
                 {stop, Reason, State#state{modstate=NewModState}}
         end.
 
+        
 riak_pipe_vnode:handle_command/3
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - Request には #cmd_enqueue が指定されているので、下記の関数が適合する
-
 
 ``riak_pipe_vnode:handle_command/3``::        
 
     ...                                              
     handle_command(#cmd_enqueue{}=Cmd, Sender, State) ->
-        enqueue_internal(Cmd, Sender, State);
+        enqueue_internal(Cmd, Sender, State);            % ==>
     ...
 
-- worker を生成して入力を worker のキューへ追加する
+- worker を生成してデータを worker のキューへ追加する
     
 ``riak_pipe_vnode:enqueue_internal/3``::
 
@@ -548,25 +586,32 @@ riak_pipe_vnode:handle_command/3
                  Sender, #state{partition=Partition}=State) ->
                  
         case worker_for(Fitting, true, State) of                                % fitting に適合した worker を探す
-                                                                                % 見つからない場合は新たに worker を生成
-                                                                                
-            {ok, #worker{details=#fitting_details{module=riak_pipe_w_crash}}}   % テスト用
+                                                                                % 見つからない場合は新たに worker を生成 ==>
+
+            % テスト用?
+            
+            {ok, #worker{details=#fitting_details{module=riak_pipe_w_crash}}}   
               when Input == vnode_killer ->
               
                 %% this is used by the eunit test named "Vnode Death"
                 %% in riak_pipe:exception_test_; it kills the vnode before
                 %% it has a chance to reply to the queue request
                 exit({riak_pipe_w_crash, vnode_killer});
-                
-            {ok, Worker} when (Worker#worker.details)#fitting_details.module    % fitting のモジュールが 
-                              /= ?FORWARD_WORKER_MODULE ->                      % riak_pipe_w_fwd でない場合
+
+            % fitting のモジュールが riak_pipe_w_fwd でない場合
+            % この時点で状態は wait_for_input
+            
+            {ok, Worker} when (Worker#worker.details)#fitting_details.module    
+                              /= ?FORWARD_WORKER_MODULE ->                      
                               
-                case add_input(Worker, Input, Sender, TO, UsedPreflist) of      % 入力を worker のキューへ追加
-                
+                case add_input(Worker, Input, Sender, TO, UsedPreflist) of      % データを worker のキューへ追加 ==>
+
+                    % worker を riak_pipe_vnode の State へ追加
+                    
                     {ok, NewWorker} ->
                         ?T(NewWorker#worker.details, [queue],
                            {vnode, {queued, Partition, Input}}),
-                        {reply, ok, replace_worker(NewWorker, State)};          % worker を riak_pipe_vnode の State へ追加
+                        {reply, ok, replace_worker(NewWorker, State)};          
                         
                     {queue_full, NewWorker} ->
                         ?T(NewWorker#worker.details, [queue,queue_full],
@@ -605,7 +650,7 @@ riak_pipe_vnode:handle_command/3
                 {ok, Worker};
             none ->
                 if (not EnforceLimitP) orelse length(Workers) < Limit ->
-                        new_worker(Fitting, State);                         % worker を新たに生成
+                        new_worker(Fitting, State);                         % worker を新たに生成 ==>
                    true ->
                         worker_limit_reached
                 end
@@ -621,7 +666,7 @@ riak_pipe_vnode:handle_command/3
                 {ok, #fitting_details{q_limit=FQL}=Details} ->
                     erlang:monitor(process, Fitting#fitting.pid),           % fitting のプロセスを監視
                     
-                    {ok, Pid} = riak_pipe_vnode_worker_sup:start_worker(    % worker を開始
+                    {ok, Pid} = riak_pipe_vnode_worker_sup:start_worker(    % worker を開始 ==>
                                   Sup, Details),
                                   
                     erlang:link(Pid),
@@ -654,9 +699,10 @@ riak_pipe_vnode:handle_command/3
                 worker_startup_failed
         end.
 
+        
 riak_pipe_vnode_worker:init/1
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+        
 ``riak_pipe_vnode_worker:init/1``::
 
     init([Partition, VnodePid, #fitting_details{module=Module}=FittingDetails]) ->
@@ -666,18 +712,96 @@ riak_pipe_vnode_worker:init/1
                         {VnodePid, VnodePid},
                         {details, FittingDetails}]),
                         
-            {ok, ModState} = Module:init(Partition, FittingDetails),    % fitting に指定されていたモジュールを初期化
+            {ok, ModState} = Module:init(Partition, FittingDetails),  % fitting に指定されていたデータの処理モジュールを初期化
             
             {ok, initial_input_request,
              #state{partition=Partition,
                     details=FittingDetails,
                     vnode=VnodePid,
-                    modstate=ModState},
-             0}                                                         % initial_input_request へ遷移
+                    modstate=ModState},                               % initial_input_request へ遷移
+             0}                                                       % timeout が 0 なので、即座に timeout する ==>
+
         catch Type:Error ->
                 {stop, {init_failed, Type, Error}}
         end.
 
+        
+riak_pipe_vnode:add_input/5
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        
+``riak_pipe_vnode:add_input/5``::
+
+    add_input(#worker{state=waiting}=Worker,
+              Input, _Sender, _TO, UsedPreflist) ->
+        %% worker has been waiting for something to enter its queue
+        send_input(Worker, {Input, UsedPreflist}),
+        PerfWorker = roll_perf(Worker),
+        {ok, PerfWorker#worker{state={working, Input}}};
+
+    % 最初はこちらが呼ばれる
+    % worker のキューにデータを追加する
+        
+    add_input(#worker{q=Q, q_limit=QL, blocking=Blocking}=Worker,
+              Input, Sender, TO, UsedPreflist) ->
+        case queue:len(Q) < QL of
+            true ->
+                {ok, Worker#worker{q=queue:in({Input, UsedPreflist}, Q)}};
+            false when TO =/= noblock ->
+                NewBlocking = queue:in({Input, Sender, UsedPreflist}, Blocking),
+                {queue_full, Worker#worker{blocking=NewBlocking}};
+            false ->
+                timeout
+        end.
+        
+
+%% この状態遷移が始まるのはいつ?
+        
+
+riak_pipe_vnode_worker:initial_input_request/2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``riak_pipe_vnode_worker:initial_input_request/2``::
+        
+    initial_input_request(timeout, State) ->
+        request_input(State),                                         % ==>
+        {next_state, wait_for_input, State}.                          % wait_for_input へ遷移
+
+        
+``riak_pipe_vnode_worker:request_input/1``::
+
+    % riak_core_vnode を経由して riak_pipe_vnode:next_input_internal/2 を呼ぶ
+    
+    request_input(#state{vnode=Vnode, details=Details}) ->
+        riak_pipe_vnode:next_input(Vnode, Details#fitting_details.fitting).  
+
+        
+``riak_pipe_vnode:next_input_internal/2``::
+        
+    next_input_internal(#cmd_next_input{fitting=Fitting}, State) ->
+    
+        case worker_by_fitting(Fitting, State) of
+        
+            {ok, #worker{handoff=undefined}=Worker} ->
+                next_input_nohandoff(Worker, State);
+                
+            {ok, Worker} ->
+                send_handoff(Worker),
+                HandoffWorker = Worker#worker{state={working, handoff},
+                                              handoff=undefined},
+                {noreply, replace_worker(HandoffWorker, State)};
+                
+            none ->
+                %% this next_input request was for a queue that this vnode
+                %% doesn't have.  ignore it.  (one example is if the vnode
+                %% receives a 'DOWN' for a fitting, and cleans up the
+                %% queue for that fitting's worker *after* the worker has
+                %% requested its next input, but before the vnode has
+                %% received that request)
+                {noreply, State}
+        end.
+
+
+        
 %% summary
         
 参考資料
