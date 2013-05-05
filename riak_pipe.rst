@@ -318,6 +318,14 @@ riak_pipe_fitting:init/1
 プロセスのモニタリング構成
 ~~~~~~~~~~~~~~~~~~~~~~
 
+- riak_pipe に添付されているモニタリング構成図
+  - 緑 - supervisor
+  　- 子プロセスが落ちたら立ち上げる。builder_sup, fitting_sup, worker_sup は動的に子プロセスを生成しているため、自分が落ちて再び立ち上げられても子プロセスは復活しない。
+  - 赤 - link
+    - 双方向の監視。
+  - 青 - monitor
+    - 一方向の監視。
+
 .. image:: ./riak_pipe_monitors.png
 
             
@@ -599,7 +607,6 @@ riak_pipe_vnode:handle_command/3
                 exit({riak_pipe_w_crash, vnode_killer});
 
             % fitting のモジュールが riak_pipe_w_fwd でない場合
-            % この時点で状態は wait_for_input
             
             {ok, Worker} when (Worker#worker.details)#fitting_details.module    
                               /= ?FORWARD_WORKER_MODULE ->                      
@@ -645,12 +652,12 @@ riak_pipe_vnode:handle_command/3
 
     worker_for(Fitting, EnforceLimitP,
                #state{workers=Workers, worker_limit=Limit}=State) ->
-        case worker_by_fitting(Fitting, State) of                   % State の worker から Fitting に適合するものを探す
+        case worker_by_fitting(Fitting, State) of               % State の worker から Fitting に適合するものを探す
             {ok, Worker} ->
                 {ok, Worker};
             none ->
                 if (not EnforceLimitP) orelse length(Workers) < Limit ->
-                        new_worker(Fitting, State);                 % worker を新たに生成 ==>
+                        new_worker(Fitting, State);             % worker を新たに生成 ==>
                    true ->
                         worker_limit_reached
                 end
@@ -720,8 +727,9 @@ riak_pipe_vnode_worker:init/1
                     details=FittingDetails,
                     vnode=VnodePid,
                     modstate=ModState},                              % initial_input_request へ遷移
-             0}                                                      % timeout が 0 なので、即座に timeout する ==>
-
+             0}                                                      % timeout が 0 なので、即座に timeout
+                                                                     % このような実装をしている理由は
+                                                                     % コメントに書いてあった
         catch Type:Error ->
                 {stop, {init_failed, Type, Error}}
         end.
@@ -731,6 +739,9 @@ riak_pipe_vnode:add_input/5
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
         
 ``riak_pipe_vnode:add_input/5``::
+
+    % worker の状態が waiting になるのは riak_pipe_vnode:next_input_internal/2 が呼ばれた時に
+    % キューが空だった場合
 
     add_input(#worker{state=waiting}=Worker,
               Input, _Sender, _TO, UsedPreflist) ->
@@ -755,17 +766,35 @@ riak_pipe_vnode:add_input/5
         end.
         
 
-%% この状態遷移が始まるのはいつ?
-        
-
 riak_pipe_vnode_worker:initial_input_request/2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- 仮に riak_pipe_worker:init/1 の中で riak_pipe_worker:request_input/1 するとデッドロックする。
+  - riak_pipe_worker:init/1 が終わらないと riak_pipe_vnode:enqueue_internal/3 が終わらないので、riak_pipe_vnode は riak_pipe_worker を待っている状態
+  - riak_pipe_worker:request_input/1 すると riak_pipe_vnode へリクエストが飛ぶが riak_pipe_worker を待っているので riak_pipe_worker は待たされる
+  - -> デッドロック
+
+- client, riak_pipe_vnode, riak_pipe_worker, riak_core_vnode の関数呼出し
+
+.. image:: ./riak_pipe_inputs.png  
+  
+
 ``riak_pipe_vnode_worker:initial_input_request/2``::
-        
+
+    %% @doc The worker has just started, and should request its first
+    %%      input from its owning vnode.  This is done after a zero
+    %%      timeout instead of in the init function to get around the
+    %%      deadlock that would result from having the worker wait for a
+    %%      message from the vnode, which is waiting for a response from
+    %%      this process.
+    ...
     initial_input_request(timeout, State) ->
-        request_input(State),                                         % ==>
-        {next_state, wait_for_input, State}.                          % wait_for_input へ遷移
+    
+        % この時点では riak_pipe_vnode:enqueue_internal/3 は処理が終わっていないかもしれないが
+        % request_input(State) による riak_pipe_vnode へのリクエストはキューイングされる?
+        
+        request_input(State),                                         
+        {next_state, wait_for_input, State}.                 % wait_for_input へ遷移
 
         
 ``riak_pipe_vnode_worker:request_input/1``::
