@@ -322,7 +322,7 @@ riak_pipe_fitting:init/1
 
   - 緑: supervisor
   
-  　- 子プロセスが落ちたら立ち上げる。
+    - 子プロセスが落ちたら立ち上げる。
     - builder_sup, fitting_sup, worker_sup は動的に子プロセスを生成しているため、自分が落ちて再び立ち上げられても子プロセスは復活しない。
   
   - 赤: link
