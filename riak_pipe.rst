@@ -98,7 +98,7 @@ riak_pipe.erl
   - riak_pipe:exec/2 == pipeline の構築
   - riak_pipe:queue_work == データの送信
   - riak_pipe:collect_results/1, riak_pipe:collect_result/1 == 結果の受信
-    
+  
 - 簡単なサンプルの実装あり。
 
 
@@ -124,10 +124,10 @@ riak_pipe:exec/2
   - riak_pipe_builder を開始
   - riak_pipe_fitting を開始
   - riak_pipe_builder と riak_pipe_fitting は子プロセスとして動的に追加される
-    
+  
     - supervisor が落ちて再開されても子プロセスは自動的に再開されない
     - riak_pipe_builder と riak_pipe_fitting がお互いに erlang:monitor する実装になっている
-        
+    
 - #pipe{} を返す
 
 ``riak_pipe:exec/2``::
@@ -319,11 +319,17 @@ riak_pipe_fitting:init/1
 ~~~~~~~~~~~~~~~~~~~~~~
 
 - riak_pipe に添付されているモニタリング構成図
+
   - 緑 - supervisor
+  
   　- 子プロセスが落ちたら立ち上げる。builder_sup, fitting_sup, worker_sup は動的に子プロセスを生成しているため、自分が落ちて再び立ち上げられても子プロセスは復活しない。
+  
   - 赤 - link
+  
     - 双方向の監視。
+    
   - 青 - monitor
+  
     - 一方向の監視。
 
 .. image:: ./riak_pipe_monitors.png
@@ -770,10 +776,11 @@ riak_pipe_vnode_worker:initial_input_request/2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - 仮に riak_pipe_worker:init/1 の中で riak_pipe_worker:request_input/1 するとデッドロックする。
+
   - riak_pipe_worker:init/1 が終わらないと riak_pipe_vnode:enqueue_internal/3 が終わらないので、riak_pipe_vnode は riak_pipe_worker を待っている状態
   - riak_pipe_worker:request_input/1 すると riak_pipe_vnode へリクエストが飛ぶが riak_pipe_worker を待っているので riak_pipe_worker は待たされる
   - -> デッドロック
-
+  
 - client, riak_pipe_vnode, riak_pipe_worker, riak_core_vnode の関数呼出し
 
 .. image:: ./riak_pipe_inputs.png  
