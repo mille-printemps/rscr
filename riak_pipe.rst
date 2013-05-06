@@ -48,7 +48,7 @@ riak pipe で何ができるのか
 
   - ``find . -name *.hrl | xargs grep define | uniq | wc -l``
   - Unix の場合は文字列が渡っていくが、riak pipe の場合はメッセージ・パッシングにより処理が進んでいく
-  - vnode へ処理を分散する <- まだよく理解していない部分
+  - vnode へ処理を分散する <== まだよく理解していない部分
 
 - pipeline の最後を reduce にすれば MapReduce になる
 - ログの解析、検索インデックスの作成などテキスト処理に使えそう
@@ -101,7 +101,7 @@ riak pipe で何ができるのか
 
 ::
 
-  {End, Results, Log} = riak_pipe:collect_results(Pipe).
+  {ok, Results} = riak_pipe:collect_results(Pipe).
 
   
 サーバ
@@ -1030,4 +1030,4 @@ riak_pipe_vnode_worker:initial_input_request/2
 - Riak Pipe - Riak's Distributed Processing Framework - Bryan Fink, RICON2012
 
   - http://vimeo.com/53910999#at=0
-  - http://hobbyist.data.riakcs.net:8080/ricon-riak-pipe.pdf <- 書かれているコードがバージョン 1.3 と異なるところがあるので注意
+  - http://hobbyist.data.riakcs.net:8080/ricon-riak-pipe.pdf <== 書かれているコードがバージョン 1.3 と異なるところがあるので注意
