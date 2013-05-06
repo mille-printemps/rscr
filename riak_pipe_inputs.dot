@@ -6,17 +6,17 @@ digraph {
     subgraph top {
         rank=same;
         client
-        riak_pipe_worker
+        riak_pipe_vnode_worker
 
-        riak_pipe_worker -> riak_pipe_worker [color="red" label="(6)event"]
+        riak_pipe_vnode_worker -> riak_pipe_vnode_worker [color="red" label="(6)event"]
     }
 
     subgraph middle {
         riak_pipe_vnode
 
         client -> riak_pipe_vnode [color="blue" label="(1)queue_work/3"]
-        riak_pipe_worker -> riak_pipe_vnode [color="red" label="(1)next_input/2"]
-        riak_pipe_vnode -> riak_pipe_worker [color="red" label="(5)send_input/2"]
+        riak_pipe_vnode_worker -> riak_pipe_vnode [color="red" label="(1)next_input/2"]
+        riak_pipe_vnode -> riak_pipe_vnode_worker [color="red" label="(5)send_input/2"]
     }
 
     subgraph bottom {

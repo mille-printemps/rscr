@@ -10,16 +10,107 @@ Riak Source Code Reading @Tokyo #11
 
 .. contents:: :depth: 3
 
-%% definitions of pipeline, sink, fitting, etc...
+
+自己紹介
+=======
+
+- クラウドベンダーのコンサルタント/エンジニア
+- 仕事で使ったことのあるプログラミング言語(多い順)
+
+  - {C,C++}, {Python,Java}, JavaScript
+
+- 2009年から Erlang を使い始める。この頃から erlang-questions のメーリングリストにも参加。
+
+  - R13B のバグを報告したことがある
+
+- polyglot wannabe 
 
 
+今日の話
+=======
+
+- riak pipe がどのように実装されているのかを中心に
+
+  - いくつかまだ理解できていないところあり
+
+    - データ処理の分散の仕方
+    - 複数の fitting がある場合の処理の流れ
+    - etc.
+
+- まだ理解できていないところと詳しい使い方の話は次の機会に
+
+
+riak pipe で何ができるのか
+========================
+
+- https://github.com/basho/riak_pipe の README から
+- Unix でいうところの pipe - 1つのプログラムで処理された結果を次のプログラムへ渡して処理を行う
+
+  - ``find . -name *.hrl | xargs grep define | uniq | wc -l``
+  - Unix の場合は文字列が渡っていくが、riak pipe の場合はメッセージ・パッシングにより処理が進んでいく
+  - vnode へ処理を分散する <- まだよく理解していない部分
+
+- pipeline の最後を reduce にすれば MapReduce になる
+- ログの解析、検索インデックスの作成などテキスト処理に使えそう
+
+
+登場人物
+=======
+  
+- pipeline: 上記の one liner のような処理の全体
+- fitting: 上記の one liner のプログラムに相当、実体はプロセス
+
+  - input: fitting へ入力されるデータ
+  - output: fitting から出力されるデータ
+
+- worker: 実際に input と output を処理するプロセス
+- sink: pipeline の処理の結果が送られるプロセス
+  - デフォルトではクライアントのプロセス
+
+
+使い方
+=====
+
+- まず pipeline を構築する
+- #fitting_spec{} に処理をおこなうモジュールの情報や処理を行う vnode の情報を設定する
+- 処理を行うモジュールは前もって実装しておく必要がある - Hadoop で Mapper や Reducer を実装するようなもの
+- サンプル - riak_pipe:example_start/0 より
+
+::
+
+    {ok, Pipe} = riak_pipe:exec(
+                [#fitting_spec{name=empty_pass,
+                     module=riak_pipe_w_pass,
+                     chashfun=fun(_) -> <<0:160/integer>> end}],
+                [{log, sink},
+                 {trace, all}]).
+
+
+- 次にデータを送信する
+- riak_pipe:queue_work/2 はデータの数分だけ呼びだされる                 
+- サンプル - riak_pipe:example_send/1 より
+
+::
+
+    ok = riak_pipe:queue_work(Pipe, "hello"),                        % riak_pipe:exec/2 から得た Pipe を渡して
+                                                                     % "hello" を送信
+    riak_pipe:eoi(Pipe).                                             % データ入力の終了を fitting へ送信
+
+    
+- 最後に結果を集める    
+
+::
+
+  {End, Results, Log} = riak_pipe:collect_results(Pipe).
+
+  
 サーバ
 ======
 
 riak_pipe_app.erl
 -----------------
 
-* application として実装されている
+- application として実装されている
 
 ``riak_pipe_app:start/2``::
 
@@ -42,7 +133,7 @@ riak_pipe_app.erl
 riak_pipe_sup.erl
 -----------------
 
-* supervisor として実装されている
+- supervisor として実装されている
 
 ``riak_pipe_sup:init/1``::
 
@@ -87,7 +178,7 @@ riak_pipe_sup.erl
                                                                        
 
 クライアント
-============
+==========
 
 riak_pipe.erl
 -------------
@@ -105,18 +196,6 @@ riak_pipe.erl
 pipeline の構築
 ---------------
 
-- サンプル - riak_pipe:example_start/0 より
-
-::
-
-    {ok, Pipe} = riak_pipe:exec(
-                [#fitting_spec{name=empty_pass,
-                     module=riak_pipe_w_pass,
-                     chashfun=fun(_) -> <<0:160/integer>> end}],
-                [{log, sink},
-                 {trace, all}]).
-
-
 riak_pipe:exec/2
 ~~~~~~~~~~~~~~~~
 - riak_pipe_builder を使って pipeline を構築する
@@ -132,13 +211,15 @@ riak_pipe:exec/2
 
 ``riak_pipe:exec/2``::
 
+    % Options が [] であった場合は生成される
+    % [{sink, #fitting{pid=self(), ref=make_ref(), chashfun=sink}}]    
+    % となるので、Sink はクライアントプロセスになる
+    
     exec(Spec, Options) ->
         [ riak_pipe_fitting:validate_fitting(F) || F <- Spec ],
         CorrectOptions = correct_trace(
                            validate_sink_type(
-                             ensure_sink(Options))), % Options が [] であった場合は生成される
-                                                     % [{sink, #fitting{pid=self(), ref=make_ref(), chashfun=sink}}]
-                                                     % となるので、Sink はクライアントプロセスになる
+                             ensure_sink(Options))), 
                                                               
     riak_pipe_builder_sup:new_pipeline(Spec, CorrectOptions).　%　==>
 
@@ -164,7 +245,7 @@ riak_pipe_builder_sup:new_pipeline/2
     -record(fitting,
         {
           pid :: pid(),                            % fitting の pid
-          ref :: reference(),                      % fitting の reference
+          ref :: reference(),                      % 自分の次の fitting の reference
           chashfun :: riak_pipe_vnode:chashfun(),  % データをどのように vnode へ分散させるかを決める hash 関数
           nval :: riak_pipe_vnode:nval()           % データを処理する vnode の最大数
         }).
@@ -196,7 +277,7 @@ riak_pipe_builder:init/1
 - pipeline を構築する
 
   - Sink を開始する
-  - Fitting を開始する
+  - riak_pipe_fitting を開始する
   - #pipe{} を生成
  
 - riak_pipe_builder は gen_fsm として実装されている
@@ -242,6 +323,7 @@ riak_pipe_builder:init/1
                     end,
                     [start_fitting(Tail, ClientOutput, Options)],
                     Rest).                               % 反転した Spec に順に start_fitting/3 を適用
+                                                         % accumulator を最後に追加しているので順番が戻る
                                                          % #fitting{} とその reference のタプルのリストを返す
                                                          % [{#fitting{pid, ref, chashfun, nval}, Ref}, ...] 
 
@@ -339,15 +421,6 @@ riak_pipe_fitting:init/1
 データの送信
 ----------
 
-- サンプル - riak_pipe:example_send/1 より
-
-::
-
-    ok = riak_pipe:queue_work(Pipe, "hello"),                        % riak_pipe:exec/2 から得た Pipe を渡して
-                                                                     % "hello" を送信
-    riak_pipe:eoi(Pipe).                                             % データ入力の終了を fitting へ送信
-
-
 - ``riak_pipe:queue_work/2`` により fitting へデータを送信。
 - ``riak_pipe:queue:work/3`` から最終的に ``riak_pipe_vnode:queue:work/4`` が呼ばれる。
 - ``riak_pipe_vnoce:queue:work/4`` は fitting spec に設定される chashfun (consistent-hashing function) により4通り定義されている。
@@ -360,7 +433,7 @@ riak_pipe:queue_work/3
 
     queue_work(#pipe{fittings=[{_,Head}|_]}, Input, Timeout)
       when Timeout =:= infinity; Timeout =:= noblock ->
-        riak_pipe_vnode:queue_work(Head, Input, Timeout).            % 先頭の fitting (#fitting{}) を渡して
+        riak_pipe_vnode:queue_work(Head, Input, Timeout).            % 先頭の #fitting{} を渡して
                                                                      % riak_pipe_vnode:queue_work/3 を呼ぶ ==>
         
 riak_pipe_vnode:queue_work/4
@@ -368,6 +441,7 @@ riak_pipe_vnode:queue_work/4
 
 - Spec に設定された hash 関数に基づいて vnode を決定
 - hash 関数によるデータの分散の例は参考資料を参照
+  - http://hobbyist.data.riakcs.net:8080/ricon-riak-pipe.pdf
 
 ``riak_pipe_vnode:queue_work/4``::
 
@@ -757,7 +831,7 @@ riak_pipe_vnode:add_input/5
         PerfWorker = roll_perf(Worker),
         {ok, PerfWorker#worker{state={working, Input}}};
 
-    % 最初はこちらが呼ばれる
+    % 最初はこちらが呼ばれるはず
     % worker のキューにデータを追加する
         
     add_input(#worker{q=Q, q_limit=QL, blocking=Blocking}=Worker,
@@ -771,22 +845,31 @@ riak_pipe_vnode:add_input/5
             false ->
                 timeout
         end.
+
+
+ここで少しまとめ
+~~~~~~~~~~~~~~
+        
+- client, riak_pipe_vnode, riak_pipe_worker, riak_core_vnode 間の通信
+- riak_pipe_vnode を経由して riak_core_vnode にコマンドが送信される
+- riak_core_vnode は自分自身にイベントを発行して処理を継続する
+
+.. image:: ./riak_pipe_inputs.png  
+
         
 
 riak_pipe_vnode_worker:initial_input_request/2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- 仮に riak_pipe_worker:init/1 の中で riak_pipe_worker:request_input/1 するとデッドロックする。
+- 仮に riak_pipe_worker:init/1 の中で riak_pipe_worker:request_input/1 するとデッドロックする。(riak_pipe_vnode_worker:initial_input_request/2 のコメントより)
 
   - riak_pipe_worker:init/1 が終わらないと riak_pipe_vnode:enqueue_internal/3 が終わらないので、riak_pipe_vnode は riak_pipe_worker を待っている状態
-  - riak_pipe_worker:request_input/1 すると riak_pipe_vnode へリクエストが飛ぶが riak_pipe_worker を待っているので riak_pipe_worker は待たされる
+  - riak_pipe_worker:init/1 の中で riak_pipe_worker:request_input/1 すると riak_pipe_vnode へリクエストが飛ぶが、riak_pipe_vnode は riak_pipe_worker を待っているので riak_pipe_worker は待たされる
   - -> デッドロック
-  
-- client, riak_pipe_vnode, riak_pipe_worker, riak_core_vnode の関数呼出し
 
-.. image:: ./riak_pipe_inputs.png  
-  
+- この関数がよばれる時点では riak_pipe_vnode:enqueue_internal/3 は処理が終わっていないかもしれない
 
+  
 ``riak_pipe_vnode_worker:initial_input_request/2``::
 
     %% @doc The worker has just started, and should request its first
@@ -797,27 +880,30 @@ riak_pipe_vnode_worker:initial_input_request/2
     %%      this process.
     ...
     initial_input_request(timeout, State) ->
-    
-        % この時点では riak_pipe_vnode:enqueue_internal/3 は処理が終わっていないかもしれないが
+
         % request_input(State) による riak_pipe_vnode へのリクエストはキューイングされる?
         
-        request_input(State),                                         
+        request_input(State),                                % riak_core_vnode にイベントを送らせたら抜ける
         {next_state, wait_for_input, State}.                 % wait_for_input へ遷移
 
         
+- riak_core_vnode を経由して riak_pipe_vnode:next_input_internal/2 を呼ぶ        
+        
 ``riak_pipe_vnode_worker:request_input/1``::
 
-    % riak_core_vnode を経由して riak_pipe_vnode:next_input_internal/2 を呼ぶ
-    
     request_input(#state{vnode=Vnode, details=Details}) ->
         riak_pipe_vnode:next_input(Vnode, Details#fitting_details.fitting).  
 
-        
+
+- riak_pipe_vnode:next_input_internal/2 が呼ばれるときには riak_pipe_vnode:enqueue_internal/3 から抜けていると仮定
+
 ``riak_pipe_vnode:next_input_internal/2``::
         
     next_input_internal(#cmd_next_input{fitting=Fitting}, State) ->
     
         case worker_by_fitting(Fitting, State) of
+
+            % 仮定よりここを worker が見つかるので、ここを通るはず
         
             {ok, #worker{handoff=undefined}=Worker} ->
                 next_input_nohandoff(Worker, State);
@@ -838,14 +924,110 @@ riak_pipe_vnode_worker:initial_input_request/2
                 {noreply, State}
         end.
 
-
         
-%% summary
+``riak_pipe_vnode::next_input_nohandoff/2``::
+
+    next_input_nohandoff(WorkerUnperf, #state{partition=Partition}=State) ->
+        Worker = roll_perf(WorkerUnperf),
+        case queue:out(Worker#worker.q) of
+
+            % add_input でキューにデータを入れているので、ここを通る
+            
+            {{value, {Input, UsedPreflist}}, NewQ} ->
+                ?T(Worker#worker.details, [queue],
+                   {vnode, {dequeue, Partition}}),
+                send_input(Worker, {Input, UsedPreflist}),　　　　　　　　　%　自分自身に input イベントを送信
+                WorkingWorker = Worker#worker{state={working, Input},
+                                              q=NewQ},
+                BlockingWorker =
+                    case {queue:len(NewQ) < Worker#worker.q_limit,
+                          queue:out(Worker#worker.blocking)} of
+                        {true, {{value, {BlockInput, Blocker, BlockUsedPreflist}},
+                                NewBlocking}} ->
+                            ?T(Worker#worker.details, [queue,queue_full],
+                               {vnode, {unblocking, Partition}}),
+                            %% move blocked input to queue
+                            NewNewQ = queue:in({BlockInput, BlockUsedPreflist},
+                                               NewQ),
+                            %% free up blocked sender
+                            reply_to_blocker(Blocker, ok),
+                            WorkingWorker#worker{q=NewNewQ,
+                                                 blocking=NewBlocking};
+                        {False, {Empty, _}} when False==false; Empty==empty ->
+                            %% nothing blocking, or handoff pushed queue
+                            %% length over q_limit
+                            WorkingWorker
+                    end,
+                {noreply, replace_worker(BlockingWorker, State)};
+
+            %　再び呼ばれたときにはこちらを通る
+                
+            {empty, _} ->
+                EmptyWorker = case Worker#worker.inputs_done of
+                                  true ->
+                                      ?T(Worker#worker.details, [eoi],
+                                         {vnode, {eoi, Partition}}),
+                                      send_input(Worker, done),
+                                      Worker#worker{state={working, done}};
+                                  false ->
+                                      ?T(Worker#worker.details, [queue],
+                                         {vnode, {waiting, Partition}}),
+                                      Worker#worker{state=waiting}
+                              end,
+                {noreply, replace_worker(EmptyWorker, State)}
+        end.
+
+- input イベントに以下のハンドラーが適合する
+        
+``riak_pipe_vnode_worker:wait_for_input/2``::
+
+    ...
+    wait_for_input({input, {Input, UsedPreflist}}, State) ->
+        NewState = process_input(Input, UsedPreflist, State),  % fitting の処理が行われる
+        request_input(NewState),                               % ここでまた request_input が呼ばれる
+        {next_state, wait_for_input, NewState};        
+    ...
+
+
+``riak_pipe_vnode_worker::process_input/3``::    
+    
+    process_input(Input, UsedPreflist,
+                  #state{details=FD, modstate=ModState}=State) ->
+        Module = FD#fitting_details.module,
+        NVal = case (FD#fitting_details.fitting)#fitting.nval of
+                   NValInt when is_integer(NValInt) -> NValInt;
+                   {NValMod, NValFun}               -> NValMod:NValFun(Input);
+                   %% 1.0.x compatibility
+                   NValFun                          ->
+                       riak_pipe_fun:compat_apply(NValFun, [Input])
+               end,
+        try
+            {Result, NewModState} = Module:process(Input,
+                                                   length(UsedPreflist) == NVal,
+                                                   ModState),
+            case Result of
+                ok ->
+                    ok;
+                forward_preflist ->
+                    forward_preflist(Input, UsedPreflist, State);
+                {error, RError} ->
+                    processing_error(
+                      result, RError, FD, ModState, Module, State, Input)
+            end,
+            State#state{modstate=NewModState}
+        catch Type:Error ->
+                processing_error(Type, Error, FD, ModState, Module, State, Input),
+                exit(processing_error)
+        end.      
+    
+
+- To be continued!!
+
         
 参考資料
 ========
 
-* Riak Pipe - Riak's Distributed Processing Framework - Bryan Fink, RICON2012
+- Riak Pipe - Riak's Distributed Processing Framework - Bryan Fink, RICON2012
 
-    - http://vimeo.com/53910999#at=0
-    - http://hobbyist.data.riakcs.net:8080/ricon-riak-pipe.pdf
+  - http://vimeo.com/53910999#at=0
+  - http://hobbyist.data.riakcs.net:8080/ricon-riak-pipe.pdf <- 書かれているコードがバージョン 1.3 と異なるところがあるので注意
