@@ -1014,18 +1014,21 @@ riak_pipe_vnode_worker:initial_input_request/2
     
     process_input(Input, UsedPreflist,
                   #state{details=FD, modstate=ModState}=State) ->
+                  
         Module = FD#fitting_details.module,
         NVal = case (FD#fitting_details.fitting)#fitting.nval of
+        
                    NValInt when is_integer(NValInt) -> NValInt;
                    {NValMod, NValFun}               -> NValMod:NValFun(Input);
                    %% 1.0.x compatibility
                    NValFun                          ->
                        riak_pipe_fun:compat_apply(NValFun, [Input])
                end,
+               
         try
-            {Result, NewModState} = Module:process(Input,
+            {Result, NewModState} = Module:process(Input,          % 処理された値を NewModState として出力
                                                    length(UsedPreflist) == NVal,
-                                                   ModState),
+                                                   ModState),                 
             case Result of
                 ok ->
                     ok;
@@ -1035,7 +1038,9 @@ riak_pipe_vnode_worker:initial_input_request/2
                     processing_error(
                       result, RError, FD, ModState, Module, State, Input)
             end,
-            State#state{modstate=NewModState}
+            
+            State#state{modstate=NewModState}                       % 処理された値は State に格納されて
+                                                                    % 次の fitting に渡される(はず) <== まだ理解できていない部分
         catch Type:Error ->
                 processing_error(Type, Error, FD, ModState, Module, State, Input),
                 exit(processing_error)
