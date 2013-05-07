@@ -80,10 +80,10 @@ riak pipe で何ができるのか
 ::
 
     {ok, Pipe} = riak_pipe:exec(
-                [#fitting_spec{name=empty_pass,
-                     module=riak_pipe_w_pass,
-                     chashfun=fun(_) -> <<0:160/integer>> end}],
-                [{log, sink},
+                [#fitting_spec{name=empty_pass,                     % fitting の名前
+                     module=riak_pipe_w_pass,                       % データの処理を行うモジュール
+                     chashfun=fun(_) -> <<0:160/integer>> end}],    % データの処理を割り振るために設定する hash 関数
+                [{log, sink},                                       % SHA-1 と同じ160bit長の hash 値を返す
                  {trace, all}]).
 
 
@@ -130,6 +130,26 @@ riak_pipe_app.erl
                 {error, Reason}
         end.
 
+- application resource file が以下のように設定されている
+- riak core を起動して ``application:start(riak_pipe).`` とすれば動くはず <== まだ動かしていない。。。
+
+::
+
+    {application, riak_pipe,
+     [
+      {description, "Riak Pipeline"},
+      {vsn, "1.3.1"},
+      {registered, []},
+      {applications, [
+                      kernel,
+                      stdlib,
+                      sasl,
+                      riak_core
+                     ]},
+      {mod, { riak_pipe_app, []}},
+      {env, []}
+     ]}.
+        
         
 riak_pipe_sup.erl
 -----------------
