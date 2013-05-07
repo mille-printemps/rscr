@@ -19,6 +19,7 @@ Riak Source Code Reading @Tokyo #11
 
   - {C,C++}, {Python,Java}, JavaScript
 
+- 仕事以外では Erlang, Ruby
 - 2009年から Erlang を使い始める。この頃から erlang-questions のメーリングリストにも参加。
 
   - R13B のバグを報告したことがある
