@@ -2,7 +2,7 @@
 Riak Pipe
 =========
 
-Riak Source Code Reading @Tokyo #11
+Riak Source Code Reading @Tokyo #10
 
 :author: Chiharu Kawatake (github: mille-printemps)
 :date: 2013-05-07
